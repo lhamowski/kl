@@ -44,10 +44,10 @@ if(MSVC)
         set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} /bigobj")
     endif()
 
-elseif(("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang") OR 
+elseif(("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang") OR
        ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU"))
     # Generate JSON Compilation Database
-    set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE) 
+    set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
     # Turn on standard set of warnings
     add_compile_options("-Wall")
     add_compile_options("-pedantic")
@@ -96,6 +96,7 @@ set(KL_FILES
     src/kl/base64.cpp
     src/kl/byte.hpp
     src/kl/ctti.hpp
+    src/kl/ctti_fusion.hpp
     src/kl/defer.hpp
     src/kl/enum_range.hpp
     src/kl/enum_reflector.hpp
@@ -129,6 +130,7 @@ set(KL_3RDPARTY_CATCH_FILES
 set(KL_TEST_FILES
     tests/base64_test.cpp
     tests/ctti_test.cpp
+    tests/ctti_fusion_test.cpp
     tests/enum_test.cpp
     tests/json_convert_test.cpp
     tests/main_test.cpp

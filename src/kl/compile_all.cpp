@@ -2,6 +2,7 @@
 #include "kl/base64.hpp"
 #include "kl/byte.hpp"
 #include "kl/ctti.hpp"
+#include "kl/ctti_fusion.hpp"
 #include "kl/defer.hpp"
 #include "kl/enum_range.hpp"
 #include "kl/enum_reflector.hpp"

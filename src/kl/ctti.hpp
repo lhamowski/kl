@@ -77,7 +77,7 @@ struct type_pack : std::integral_constant<std::size_t, sizeof...(Ts)>
     };
 };
 
-template <typename T>
+template <typename T, typename Enable = void>
 struct type_info
 {
     using type = std::decay_t<T>;
@@ -231,7 +231,7 @@ constexpr std::size_t base_num_fields(type_pack<Head, Tail...>)
                                      bases_, values_)                          \
     namespace kl {                                                             \
     template <>                                                                \
-    struct type_info<full_name_>                                               \
+    struct type_info<full_name_, void>                                         \
     {                                                                          \
         using type = full_name_;                                               \
         using base_types = type_pack<KL_TYPE_INFO_GET_BASE_TYPES(bases_)>;     \
