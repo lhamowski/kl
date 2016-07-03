@@ -17,7 +17,7 @@ struct type_info<
     std::enable_if_t<std::is_same<typename boost::mpl::sequence_tag<T>::type,
                                   boost::fusion::fusion_sequence_tag>::value>>
 {
-    using type = std::decay_t<T>;
+    using this_type = std::decay_t<T>;
     using base_types = type_pack<>;
 
     static const char* name() { return typeid(T).name(); }
@@ -44,6 +44,31 @@ struct type_info<
         visitor_wrapper1<Type&&, Visitor&&> wrapper{
             std::forward<Visitor>(visitor)};
         boost::fusion::for_each(indices_t{}, wrapper);
+    }
+
+    template <std::size_t N>
+    using type =
+        typename boost::fusion::result_of::value_at_c<this_type, N>::type;
+
+    template <typename U, std::size_t N>
+    using at_type =
+        typename boost::fusion::result_of::at_c<std::remove_reference_t<U>,
+                                                N>::type;
+
+    // Returns reference to N-th element in a Sequence
+    template <std::size_t N, typename Type>
+    static at_type<Type, N> at(Type&& instance)
+    {
+        static_assert(!std::is_rvalue_reference<Type&&>::value,
+                      "instance can't be a rvalue reference");
+        return boost::fusion::at_c<N>(std::forward<Type>(instance));
+    }
+
+    template <std::size_t N>
+    static const char* field_name()
+    {
+        return boost::fusion::extension::struct_member_name<this_type,
+                                                            N>::call();
     }
 
 private:

@@ -80,7 +80,7 @@ struct type_pack : std::integral_constant<std::size_t, sizeof...(Ts)>
 template <typename T, typename Enable = void>
 struct type_info
 {
-    using type = std::decay_t<T>;
+    using this_type = T;
     using base_types = type_pack<>;
 
     static const char* name() { return typeid(T).name(); }
@@ -132,9 +132,6 @@ struct ctti
     }
 
     template <typename Reflectable>
-    using type = typename type_info<Reflectable>::type;
-
-    template <typename Reflectable>
     using base_types = typename type_info<Reflectable>::base_types;
 
     template <typename Reflectable>
@@ -166,6 +163,29 @@ struct ctti
     {
         return ctti::num_fields<Reflectable>() +
                detail::base_num_fields(ctti::base_types<Reflectable>());
+    }
+
+    template <typename Reflectable, std::size_t N>
+    using type = typename type_info<Reflectable>::template type<N>;
+
+    // We use remove_const<> here since these two calls return different type:
+    // - at_type<const T, 0> = bool&
+    // - at_type<T, 0> = const bool&
+    template <typename Reflectable, std::size_t N>
+    using at_type = typename type_info<
+        std::remove_const_t<Reflectable>>::template at_type<Reflectable, N>;
+
+    template <std::size_t N, typename Reflectable>
+    static decltype(auto) at(Reflectable&& r)
+    {
+        using non_ref = std::decay_t<Reflectable>;
+        return type_info<non_ref>::template at<N>(std::forward<Reflectable>(r));
+    }
+
+    template <typename Reflectable, std::size_t N>
+    static const char* field_name()
+    {
+        return type_info<Reflectable>::template field_name<N>();
     }
 };
 
@@ -233,7 +253,7 @@ constexpr std::size_t base_num_fields(type_pack<Head, Tail...>)
     template <>                                                                \
     struct type_info<full_name_, void>                                         \
     {                                                                          \
-        using type = full_name_;                                               \
+        using this_type = full_name_;                                          \
         using base_types = type_pack<KL_TYPE_INFO_GET_BASE_TYPES(bases_)>;     \
                                                                                \
         static const char* name() { return BOOST_PP_STRINGIZE(name_); }        \
@@ -255,6 +275,39 @@ constexpr std::size_t base_num_fields(type_pack<Head, Tail...>)
         {                                                                      \
             KL_TYPE_INFO_VISIT_WITH_FIELD_TYPE_INFO_BASES(bases_)              \
             KL_TYPE_INFO_VISIT_WITH_FIELD_TYPE_INFO(values_)                   \
+        }                                                                      \
+                                                                               \
+    private:                                                                   \
+        template <typename Dummy, std::size_t N>                               \
+        struct type_impl {};                                                   \
+                                                                               \
+        template <typename U, typename Field>                                  \
+        using at_type_impl =                                                   \
+            std::add_lvalue_reference_t<typename detail::make_const<           \
+                std::remove_reference_t<U>, Field>::type>;                     \
+                                                                               \
+        KL_TYPE_INFO_TYPE_IMPL(values_)                                        \
+                                                                               \
+    public:                                                                    \
+        template <std::size_t N>                                               \
+        using type = typename type_impl<this_type, N>::type;                   \
+                                                                               \
+        template <typename U, std::size_t N>                                   \
+        using at_type = typename type_impl<this_type, N>::template at_type<U>; \
+                                                                               \
+        template <std::size_t N, typename Type>                                \
+        static at_type<Type, N> at(Type&& instance)                            \
+        {                                                                      \
+            static_assert(!std::is_rvalue_reference<Type&&>::value,            \
+                          "instance can't be a rvalue reference");             \
+            return type_impl<this_type, N>::value(                             \
+                std::forward<Type>(instance));                                 \
+        }                                                                      \
+                                                                               \
+        template <std::size_t N>                                               \
+        static const char* field_name()                                        \
+        {                                                                      \
+            return type_impl<this_type, N>::name();                            \
         }                                                                      \
     };                                                                         \
     }
@@ -299,7 +352,7 @@ constexpr std::size_t base_num_fields(type_pack<Head, Tail...>)
 #define KL_TYPE_INFO_VISIT_WITH_FIELD_INFO_IMPL(name_)                         \
     std::forward<Visitor>(visitor)(                                            \
         detail::field_info<std::remove_reference_t<Type>,                      \
-                           decltype(type::name_)>{obj.name_,                   \
+                           decltype(this_type::name_)>{obj.name_,              \
                                                   BOOST_PP_STRINGIZE(name_)});
 
 #define KL_TYPE_INFO_VISIT_WITH_FIELD_INFO(values_)                            \
@@ -309,7 +362,7 @@ constexpr std::size_t base_num_fields(type_pack<Head, Tail...>)
 #define KL_TYPE_INFO_VISIT_WITH_FIELD_KL_TYPE_INFO_IMPL(name_)                 \
     std::forward<Visitor>(visitor)(                                            \
         detail::field_type_info<std::remove_reference_t<Type>,                 \
-                                decltype(type::name_)>{                        \
+                                decltype(this_type::name_)>{                   \
             BOOST_PP_STRINGIZE(name_)});
 
 #define KL_TYPE_INFO_VISIT_WITH_FIELD_TYPE_INFO(values_)                       \
@@ -338,3 +391,34 @@ constexpr std::size_t base_num_fields(type_pack<Head, Tail...>)
     KL_TYPE_INFO_FOR_EACH_IN_TUPLE_IF(ns_,                                     \
                                       KL_TYPE_INFO_NAMESPACE_SCOPE_STRING)     \
     BOOST_PP_STRINGIZE(name_)
+
+#define KL_TYPE_INFO_TYPE_IMPL_IMPL(name_, index_)                             \
+    template <typename Dummy>                                                  \
+    struct type_impl<Dummy, index_>                                            \
+    {                                                                          \
+        using type = decltype(this_type::name_);                               \
+        template <typename T>                                                  \
+        using at_type = at_type_impl<T, type>;                                 \
+                                                                               \
+        static const char* name() { return BOOST_PP_STRINGIZE(name_); }        \
+                                                                               \
+        template <typename Type>                                               \
+        static at_type<Type> value(Type&& instance)                            \
+        {                                                                      \
+            return instance.name_;                                             \
+        }                                                                      \
+    };
+
+#define KL_TYPE_INFO_FOR_EACH_IN_TUPLE_INDEX(_, index_, tuple_macro_)          \
+    BOOST_PP_TUPLE_ELEM(1, tuple_macro_)                                       \
+    (BOOST_PP_TUPLE_ELEM(index_, BOOST_PP_TUPLE_ELEM(0, tuple_macro_)), index_)
+
+#define KL_TYPE_INFO_FOR_EACH_IN_TUPLE_IF_INDEX(values_, macro_)               \
+    BOOST_PP_EXPR_IF(BOOST_PP_IS_BEGIN_PARENS(values_),                        \
+                     BOOST_PP_REPEAT(BOOST_PP_TUPLE_SIZE(values_),             \
+                                     KL_TYPE_INFO_FOR_EACH_IN_TUPLE_INDEX,     \
+                                     (values_, macro_)))
+
+#define KL_TYPE_INFO_TYPE_IMPL(values_)                                        \
+    KL_TYPE_INFO_FOR_EACH_IN_TUPLE_IF_INDEX(values_,                           \
+                                            KL_TYPE_INFO_TYPE_IMPL_IMPL)
