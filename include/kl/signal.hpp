@@ -675,6 +675,375 @@ private:
     }
 };
 
+namespace ext {
+
+namespace detail2 {
+
+template <typename Ret>
+struct sink_invoker
+{
+private:
+    template <typename Sink, typename Slot, typename MemFun, typename... Args>
+    static bool call_impl(std::false_type /*is_sink_return_type_void*/,
+                          Sink&& sink, const Slot& slot, const MemFun& fun,
+                          const Args&... args)
+    {
+        return !!std::forward<Sink>(sink)(slot(fun, args...));
+    }
+
+    template <typename Sink, typename Slot, typename MemFun, typename... Args>
+    static bool call_impl(std::true_type /*is_sink_return_type_void*/,
+                          Sink&& sink, const Slot& slot, const MemFun& fun,
+                          const Args&... args)
+    {
+        std::forward<Sink>(sink)(slot(fun, args...));
+        return false;
+    }
+
+public:
+    template <typename Sink, typename Slot, typename MemFun, typename... Args>
+    static bool call(Sink&& sink, const Slot& slot, const MemFun& fun,
+                     const Args&... args)
+    {
+        using is_sink_return_type_void = std::integral_constant<
+            bool, std::is_same<void, std::result_of_t<Sink(Ret)>>::value>;
+
+        return sink_invoker::call_impl(is_sink_return_type_void{},
+                                       std::forward<Sink>(sink), slot, fun,
+                                       args...);
+    }
+};
+
+template <>
+struct sink_invoker<void>
+{
+private:
+    template <typename Sink, typename Slot, typename MemFun, typename... Args>
+    static bool call_impl(std::false_type /*is_sink_return_type_void*/,
+                          Sink&& sink, const Slot& slot, const MemFun& fun,
+                          const Args&... args)
+    {
+        slot(fun, args...);
+        return !!std::forward<Sink>(sink)();
+    }
+
+    template <typename Sink, typename Slot, typename MemFun, typename... Args>
+    static bool call_impl(std::true_type /*is_sink_return_type_void*/,
+                          Sink&& sink, const Slot& slot, const MemFun& fun,
+                          const Args&... args)
+    {
+        slot(fun, args...);
+        std::forward<Sink>(sink)();
+        return false;
+    }
+
+public:
+    template <typename Sink, typename Slot, typename MemFun, typename... Args>
+    static bool call(Sink&& sink, const Slot& slot, const MemFun& fun,
+                     const Args&... args)
+    {
+        using is_sink_return_type_void = std::integral_constant<
+            bool, std::is_same<void, std::result_of_t<Sink()>>::value>;
+
+        return sink_invoker::call_impl(is_sink_return_type_void{},
+                                       std::forward<Sink>(sink), slot, fun,
+                                       args...);
+    }
+};
+} // namespace detail2
+
+template <typename Interface>
+class interface_signal : public detail::signal_base
+{
+public:
+    interface_signal() noexcept = default;
+    ~interface_signal() { disconnect_all_slots(); }
+
+    interface_signal(const interface_signal&) = delete;
+    interface_signal& operator=(const interface_signal&) = delete;
+
+    interface_signal(interface_signal&& other) noexcept
+        : slots_{std::exchange(other.slots_, nullptr)},
+          next_id_{other.next_id_},
+          emits_{other.emits_}
+    {
+        rebind();
+    }
+
+    interface_signal& operator=(interface_signal&& other) noexcept
+    {
+        swap(*this, other);
+        return *this;
+    }
+
+    // Connects signal object to given slot object.
+    connection connect(Interface* receiver, connect_position at = at_back)
+    {
+        if (!receiver)
+            return {};
+        auto connection_info =
+            std::make_shared<detail::connection_info>(this, ++next_id_);
+        insert_new_slot(new interface_signal::slot(connection_info, receiver),
+                        at);
+        return make_connection(std::move(connection_info));
+    }
+
+    template <typename MemFun, typename... Args>
+    void operator()(MemFun fun, Args... args)
+    {
+        call_each_slot([&](const slot& s) {
+            s(fun, args...);
+            return false;
+        });
+
+        cleanup_invalidated_slots();
+    }
+
+    template <typename Sink, typename MemFun, typename... Args>
+    void call_sinked(Sink&& sink, MemFun fun, Args... args)
+    {
+        call_each_slot([&](const slot& s) {
+            using return_type =
+                decltype((std::declval<Interface&>().*fun)(args...));
+            using invoker = detail2::sink_invoker<return_type>;
+            return invoker::call(std::forward<Sink>(sink), s, fun, args...);
+        });
+
+        cleanup_invalidated_slots();
+    }
+
+    // Disconnects all slots bound to this signal
+    void disconnect_all_slots() noexcept
+    {
+        for (auto iter = slots_; iter;)
+        {
+            iter->invalidate();
+            auto prev = iter;
+            iter = iter->next;
+            delete prev;
+        }
+        slots_ = nullptr;
+        emits_ = 0;
+    }
+
+    // Retrieves number of slots connected to this signal
+    size_t num_slots() const noexcept
+    {
+        size_t sum{0};
+        for (auto iter = slots_; iter; iter = iter->next)
+        {
+            if (iter->valid())
+                ++sum;
+        }
+        return sum;
+    }
+
+    // Returns true if signal isn't connected to any slot
+    bool empty() const noexcept { return num_slots() == 0; }
+
+    friend void swap(interface_signal& left, interface_signal& right) noexcept
+    {
+        using std::swap;
+        swap(left.next_id_, right.next_id_);
+        swap(left.slots_, right.slots_);
+        swap(left.emits_, right.emits_);
+
+        left.rebind();
+        right.rebind();
+    }
+
+private:
+    void disconnect(int id) noexcept override
+    {
+        for (auto iter = slots_; iter; iter = iter->next)
+        {
+            if (iter->connection_info().id != id)
+                continue;
+
+            // We can't delete the node here since we could be in the middle
+            // of signal emission or we are called from extended slot. In
+            // that case it would lead to removal of connection (proxy slot
+            // keeps the copy) that is invoking this very function.
+            iter->invalidate();
+            emits_ |= should_cleanup;
+            cleanup_invalidated_slots();
+            return;
+        }
+    }
+
+    void rebind() noexcept
+    {
+        cleanup_invalidated_slots_impl();
+
+        // Rebind back-pointer to new signal
+        for (auto iter = slots_; iter; iter = iter->next)
+        {
+            assert(iter->connection_info().parent);
+            iter->connection_info().parent = this;
+        }
+    }
+
+    template <typename Func>
+    void call_each_slot(Func&& func)
+    {
+        struct decrement_op
+        {
+            unsigned& value;
+            ~decrement_op() { --value; }
+        } op{++emits_};
+
+        const auto highest_id = highest_connection_id();
+
+        for (auto iter = slots_;
+             iter && iter->connection_info().id <= highest_id;
+             iter = iter->next)
+        {
+            if (!iter->is_blocked() && iter->valid())
+            {
+                if (func(*iter))
+                    break;
+            }
+        }
+    }
+
+    template <typename Pred>
+    void remove_slots_if(Pred&& pred) noexcept
+    {
+        for (auto iter = slots_, prev = slots_; iter;)
+        {
+            if (pred(*iter))
+            {
+                auto next = iter->next;
+                prev->next = next;
+                if (slots_ == iter)
+                    slots_ = next;
+                delete iter;
+                iter = next;
+            }
+            else
+            {
+                prev = iter;
+                iter = iter->next;
+            }
+        }
+    }
+
+    void cleanup_invalidated_slots_impl()
+    {
+        assert(emits_ == 0 || emits_ == should_cleanup);
+        remove_slots_if([](slot& s) { return !s.valid(); });
+    }
+
+    void cleanup_invalidated_slots()
+    {
+        // We can free dead slots only when we're not in the middle of an
+        // emission and also there's anything to cleanup
+        if (emits_ == should_cleanup)
+        {
+            cleanup_invalidated_slots_impl();
+            emits_ = 0;
+        }
+    }
+
+    int highest_connection_id() const
+    {
+        int ret = -1;
+        for (auto iter = slots_; iter; iter = iter->next)
+        {
+            if (iter->valid() && iter->connection_info().id > ret)
+                ret = iter->connection_info().id;
+        }
+        return ret;
+    }
+
+private:
+    class slot final
+    {
+    public:
+        slot* next{nullptr};
+
+    public:
+        slot(std::shared_ptr<detail::connection_info> connection_info,
+             Interface* impl) noexcept
+            : connection_info_{std::move(connection_info)}, impl_{impl}
+
+        {
+        }
+
+        slot(const slot&) = delete;
+        slot& operator=(const slot&) = delete;
+
+        template <typename MemFun, typename... Args>
+        decltype(auto) operator()(MemFun fun, const Args&... args) const
+        {
+            return (impl_->*fun)(args...);
+        }
+
+        void invalidate() noexcept { connection_info().parent = nullptr; }
+
+        const detail::connection_info& connection_info() const noexcept
+        {
+            return *connection_info_;
+        }
+
+        detail::connection_info& connection_info() noexcept
+        {
+            return *connection_info_;
+        }
+
+        bool valid() const noexcept
+        {
+            return connection_info().parent != nullptr;
+        }
+        bool is_blocked() const noexcept
+        {
+            return connection_info().blocking > 0;
+        }
+
+    private:
+        std::shared_ptr<detail::connection_info> connection_info_;
+        Interface* impl_;
+    };
+
+    slot* slots_{nullptr};
+    int next_id_{0};
+    // On most significant bit we store if there are any invalidated slots that
+    // need to be cleanup
+    unsigned emits_{0};
+    // If emits_ equals to should_cleanup we know there's no emission in place
+    // and there are invalidated slots
+    static constexpr unsigned should_cleanup = 0x80000000;
+
+private:
+    void insert_new_slot(slot* new_slot, connect_position at) noexcept
+    {
+        if (!slots_)
+        {
+            slots_ = new_slot;
+            return;
+        }
+
+        if (at == at_back)
+        {
+            auto iter = slots_, prev = slots_;
+            while (iter)
+            {
+                prev = iter;
+                iter = iter->next;
+            }
+
+            iter = prev;
+            iter->next = new_slot;
+        }
+        else
+        {
+            new_slot->next = slots_;
+            slots_ = new_slot;
+        }
+    }
+};
+} // namespace ext
+
 template <typename T, typename Ret, typename... Args>
 std::function<Ret(Args...)> make_slot(Ret (T::*mem_func)(Args...), T* instance)
 {

@@ -777,3 +777,45 @@ TEST_CASE("make_slot and KL_SLOT macro inside class contructor")
     REQUIRE(c.cnt == 2);
 #endif
 }
+
+class callback
+{
+public:
+    virtual void foo() = 0;
+    virtual bool bar(int d) = 0;
+    virtual int& zzz() = 0;
+};
+
+class callback_impl : public callback
+{
+public:
+    void foo() override {}
+    bool bar(int d) override { return d == 0; }
+    int& zzz() { return z; }
+
+    int z = 33;
+};
+
+TEST_CASE("qwe")
+{
+    kl::ext::interface_signal<callback> sig;
+    callback_impl impl;
+
+    sig.connect(&impl);
+    sig.connect(&impl);
+
+    sig(&callback::foo);
+    sig(&callback::bar, 3);
+    sig(&callback::bar, 0);
+
+    sig.call_sinked(
+        [](bool v) {
+            return v;
+        },
+        &callback::bar, 0);
+
+    sig.call_sinked([]() { return false; }, &callback::foo);
+
+    sig(&callback::zzz);
+    sig.call_sinked([](int& v) { return false; }, &callback::zzz);
+}
