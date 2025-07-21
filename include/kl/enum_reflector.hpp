@@ -100,7 +100,7 @@ struct enum_reflector
         // Check if first enum value is 0 and the last enum value is equal to number of enum values minus 0
         constexpr auto first_value = rng.begin()->value;
         constexpr auto last_value = (rng.begin() + rng.size() - 1)->value;
-        if (first_value != static_cast<Enum>(0) ||
+        if constexpr (first_value != static_cast<Enum>(0) ||
             last_value != static_cast<Enum>(rng.size() - 1))
         {
             return false;
