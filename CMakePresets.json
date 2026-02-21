@@ -158,6 +158,10 @@
             "inherits": [":linux", ":gcc", ":asan"]
         },
         {
+            "name": "gcc-tsan",
+            "inherits": [":linux", ":gcc", ":tsan"]
+        },
+        {
             "name": "gcc-ubsan",
             "inherits": [":linux", ":gcc", ":ubsan"]
         },
@@ -188,11 +192,6 @@
         {
             "name": "msvc-asan",
             "inherits": [":windows", ":msvc", ":x64-arch-external", ":asan"]
-        },
-        {
-            "name": "vs2019",
-            "inherits": [":windows", ":msvc", ":x64-arch-set"],
-            "generator": "Visual Studio 16 2019"
         },
         {
             "name": "vs2022",
